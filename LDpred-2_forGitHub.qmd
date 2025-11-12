@@ -1,0 +1,193 @@
+---
+title: "LDpred-2"
+author: "Emilie Willoch Olstad"
+format: html
+editor: visual
+---
+
+## Prepare environment
+
+### Load packages and functions
+
+```{r}
+require("genio")
+require("dplyr")
+require("bigsnpr")
+require("data.table")
+require("magrittr")
+require("ggplot2")
+require("bigreadr")
+require("foreign")
+require("ggpmisc")
+
+options(bigstatsr.check.parallel.blas = FALSE)
+options(default.nproc.blas = NULL)
+
+`%notin%` = Negate(`%in%`)
+
+NCORES = nb_cores()
+```
+
+## LDpred-2
+
+### Load HapMap3+
+
+The authors of LDpred2 recommend restricting to HapMap3+ only (Priv? *et al.*, https://privefl.github.io/bigsnpr/articles/LDpred2.html).
+
+```{r}
+map_ldref = readRDS(file = "path_to_HapMap.rds")
+```
+
+### Load and prepare summary statistics
+
+```{r}
+sumstats = read.csv2("path_to_sumstats.csv", sep = " ")
+
+# Order your file and rename variables
+names(sumstats)
+sumstats = sumstats[, c("chr", "pos", "rsid", "a1", "a0", "n_eff", "beta_se", "p", "beta", "info", "freq")]
+
+names(sumstats) =
+    c("chr",
+    "pos",
+    "rsid",
+    "a1",
+    "a0",
+    "n_eff",
+    "beta_se",
+    "p",
+    "beta",
+    "INFO",
+    "MAF")
+
+# Include only the SNPs in the HapMap3+ file
+info_snp = snp_match(sumstats, map_ldref)
+(info_snp = tidyr::drop_na(tibble::as_tibble(info_snp)))
+```
+
+### Extended GWAS QC of the base data
+
+This QC step is suggested by the creators of the LDpred2 and it is described on the LDpred2 website (https://privefl.github.io/bigsnpr/articles/LDpred2.html).
+
+```{r}
+df_beta <- info_snp %>%
+  mutate(sd_af = sqrt(2 * af_UKBB * (1 - af_UKBB)),
+         sd_ss = 2 / sqrt(n_eff * beta_se^2 + beta^2), 
+         sd_ss = sd_ss / sqrt(INFO))
+
+df_beta$is_bad <- with(df_beta,
+                         df_beta$sd_ss < (0.5 * df_beta$sd_af) | df_beta$sd_ss > (df_beta$sd_af + 0.1) |
+                           df_beta$sd_ss < 0.1 | df_beta$sd_af < 0.05)
+
+badsamples = df_beta[df_beta$is_bad, "rsid"]
+
+qplot(sd_af, sd_ss, color = ifelse(is_bad, "Yes", "No"), alpha = I(0.5),
+      data = df_beta) +
+  theme_bigstatsr(0.8) +
+  coord_equal() +
+  theme(legend.position = c(0.2, 0.8)) +
+  scale_color_viridis_d(direction = -1) +
+  geom_abline(linetype = 2, color = "red") +
+  labs(x = "Standard deviations derived from allele frequencies of the LD reference",
+       y = "Standard deviations derived from the summary statistics",
+       color = "Removed?")
+
+# Remove bad samples
+df_beta = df_beta[!(df_beta$rsid %in% badsamples$rsid), ]
+```
+
+### Restrict to the SNPs in the binary files
+
+```{r}
+length1 = dim(df_beta)[1]
+
+map_test = read_bim(file = "path_to_bim.bim")
+
+in_test = vctrs::vec_in(df_beta[, c("chr", "pos")], map_test[, c("chr", "pos")])
+df_beta = df_beta[in_test, ]
+```
+
+### Calculate correlation
+
+```{r}
+tmp <- tempfile(tmpdir = "path_to_tempDir")
+
+for (chr in 1:22) {
+
+  cat(chr, ".. ", sep = "")
+
+  ## indices in 'df_beta'
+  ind.chr <- which(df_beta$chr == chr)
+  ## indices in 'map_ldref'
+  ind.chr2 <- df_beta$`_NUM_ID_`[ind.chr]
+  ## indices in 'corr_chr'
+  ind.chr3 <- match(ind.chr2, which(map_ldref$chr == chr))
+
+  corr_chr <- readRDS(paste0("path_to_LD_with_blocks_chr", chr, ".rds"))[ind.chr3, ind.chr3]
+
+  if (chr == 1) {
+    corr <- as_SFBM(corr_chr, tmp, compact = TRUE)
+  } else {
+    corr$add_columns(corr_chr, nrow(corr))
+  }
+}
+```
+
+### Heritability estimation using LD score regression
+
+```{r}
+(ldsc = snp_ldsc(df_beta$ld, 
+                 ld_size = nrow(map_ldref),
+                 chi2 = (df_beta$beta / df_beta$beta_se)^2,
+                 sample_size = df_beta$n_eff,
+                 ncores = NCORES))
+
+h2_est <- ldsc[["h2"]]
+```
+
+### Run LDpred2-auto
+
+```{r}
+coef_shrink = 0.95
+
+multi_auto = snp_ldpred2_auto(corr,
+                              df_beta,
+                              h2_init = h2_est,
+                              vec_p_init = seq_log(1e-4, 0.9, length.out = 50),
+                              ncores = NCORES,
+                              allow_jump_sign = FALSE, shrink_corr = coef_shrink)
+
+# Visualize convergence of chains
+for (i in 1:length(multi_auto)){
+  auto <- multi_auto[[i]]  
+plot_grid(
+  qplot(y = auto$path_p_est) + 
+    theme_bigstatsr() + 
+    geom_hline(yintercept = auto$p_est, col = "blue") +
+    scale_y_log10() +
+    labs(y = "p"),
+  qplot(y = auto$path_h2_est) + 
+    theme_bigstatsr() + 
+    geom_hline(yintercept = auto$h2_est, col = "blue") +
+    labs(y = "h2"),
+  ncol = 1, align = "hv"
+)
+}
+
+
+# Filter to include only best chains and average effect sizes over the remaining ones
+(range = sapply(multi_auto, function(auto) diff(range(auto$corr_est))))
+(keep <- which(range > (0.95 * quantile(range, 0.95, na.rm = TRUE))))
+
+beta_auto <- rowMeans(sapply(multi_auto[keep], function(auto) auto$beta_est)) 
+final_beta_auto = cbind(df_beta[,1:5], beta_auto) 
+
+write.table(final_beta_auto, "path_to_betasLDpred2.txt", row.names = FALSE, quote = FALSE, sep = " ")
+```
+
+### Obtain PRS using PLINK
+
+```{bash}
+# Calculate the PGSs for your target data
+plink --bfile path_to_bfile --score path_to_betasLDpred2.txt 5 4 6 sum --out path_to_output
+```

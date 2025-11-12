@@ -1,0 +1,107 @@
+---
+title: "T.test_group_diff_PRSs_ASD/ADHD"
+author: "Mathilde Kinge-Rasmussen"
+date: "2025-11-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Prepeare envrionment
+```{r}
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(plyr)
+```
+
+## Read in files 
+```{r}
+results_PRS= read.csv2("adhdAsd_PRSs.csv") #PRS result file
+samples_wwe= read.table("M:path/to/folder/samples_of_wwe_geno.txt")
+samples_nepi= read.table("M:path/to/folder/samples_nepi_geno.txt")
+```
+
+
+```{r}
+samples_wwe_PRS= merge(results_PRS, samples_wwe, by= "ID")
+samples_nepi_PRS= merge(results_PRS, samples_nepi, by= "ID")
+
+# Create a column to group the datasets
+samples_nepi_PRS <- samples_nepi %>%
+  mutate(Group = "Children of mothers without epilepsy")
+
+samples_wwe_PRS <- samples_wwe %>%
+  mutate(Group = "Children of mothers with epilepsy")
+
+# combine into one datafrme 
+PRS_results_combined= rbind(samples_nepi_PRS, samples_wwe_PRS)
+
+# Select relevant PRS results for ADHD and ASD
+prs_results_ADHD <- select(PRS_results_combined=, c("ID", "PRS_ADHD", "Group"))
+prs_results_ASD <- select(PRS_results_combined=, c("ID", "PRS_ASD", "Group"))
+```
+
+## Perform two-sided T-test
+```{r}
+# Perform two-sided t-tests
+t_test_result_ADHD <- t.test(PRS_ADHD ~ Group, data = prs_results_ADHD)
+print(t_test_result_ADHD)
+
+t_test_result_ASD <- t.test(PRS_ASD ~ Group, data = prs_results_ASD)
+print(t_test_result_ASD)
+```
+
+## Plot the results 
+```{r}
+mean_ADHD <- ddply(prs_results_ADHD[!is.na(prs_results_ADHD$Group), ], 
+                   "Group", 
+                   summarise, 
+                   grp.mean = mean(PRS_ADHD))
+
+density_plot_ADHD <- ggplot(prs_results_ADHD, aes(x = PRS_ADHD, fill = Group)) +
+  geom_density(alpha = 0.4) +
+  labs(x = "PRS ADHD", y = "Density") +
+  theme_minimal(base_size = 15) +
+  scale_fill_manual(values = c("Children of mothers without epilepsy" = "#009E73", 
+                                "Children of mothers with epilepsy" = "orchid3")) +
+  geom_vline(data = mean_ADHD, aes(xintercept = grp.mean, color = Group),
+             linetype = "dashed", linewidth = 0.7) +
+  scale_x_continuous(breaks = seq(-4, 4, by = 1), limits = c(-4, 4)) +
+  theme(axis.text = element_text(size = 12), 
+        legend.title = element_text(size = 12), 
+        legend.text = element_text(size = 12), 
+        legend.position = "bottom")
+
+# Save the ADHD density plot
+ggsave(filename = "density_plot_ADHD.png", plot = density_plot_ADHD, 
+       width = 10, height = 7, dpi = 300)
+
+
+# ASD Density Plot
+mean_ASD <- ddply(prs_results_ASD[!is.na(prs_results_ASD$Group), ], 
+                   "Group", 
+                   summarise, 
+                   grp.mean = mean(PRS_ASD))
+
+density_plot_ASD <- ggplot(prs_results_ASD, aes(x = PRS_ASD, fill = Group)) +
+  geom_density(alpha = 0.4) +
+  labs(x = "PRS ASD", y = "Density") +
+  theme_minimal(base_size = 15) +
+  scale_fill_manual(values = c("Children of mothers without epilepsy" = "#009E73", 
+                                "Children of mothers with epilepsy" = "orchid3")) +
+  geom_vline(data = mean_ASD, aes(xintercept = grp.mean, color = Group),
+             linetype = "dashed", linewidth = 0.7) +
+  scale_x_continuous(breaks = seq(-4, 4, by = 1), limits = c(-4, 4)) +
+  theme(axis.text = element_text(size = 12), 
+        legend.title = element_text(size = 12), 
+        legend.text = element_text(size = 10), 
+        legend.position = "bottom")
+
+# Save the ASD density plot
+ggsave(filename = "density_plot_ASD.png", plot = density_plot_ASD, 
+       width = 10, height = 7, dpi = 300)
+
+```
+

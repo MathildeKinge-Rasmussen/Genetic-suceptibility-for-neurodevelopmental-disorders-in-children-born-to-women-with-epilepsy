@@ -1,0 +1,164 @@
+---
+title: "Linear_regression_models"
+author: "Mathilde Kinge-Rasmussen"
+date: "2025-11-04"
+output: html_document
+---
+# Code for runnding the simple linear regrssion models
+
+## The first part provided shows the code for running simple linear regression testing the association between the PRSs for ADHD and social difficulties at 6 months in children of the general population (section 3.-5.). The same functionality can be applied for all 25 neurodevelopmental outcome measures assessed and for assessing theese associations with PRSs ASD in the same population
+
+## The second part of the code provided  the code for running simple linear regression testing the association between the PRSs for ADHD and social difficulties at 6 months in children of women with epilepsy, including ASM exposure variable as a covariate (section 6.-10.). The same functionality can be applied forthe all 25 neurodevelopmental traits assessed and for assessing these associations with PRSs ASD in the same population
+
+## (9.) shows how FDR-correction using BH method was applied
+
+##(10.) Plotting code for vizualisation of the results with the same funciotnality can be applied for all models
+
+##(11.) Code for combining the plots from the different traits assessed into one figure 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Prepeare envrionment
+```{r}
+#load packages
+library(ggplot2)
+library(tidyverse)
+library(stats)
+library(stringr)
+library(dplyr)
+library(ggpubr)
+```
+
+## 2. Read in PRS result file 
+```{r}
+results_PRS= read.csv2("adhdAsd_PRSs.csv") 
+```
+
+## 3. Read in phenotypic files with z_scores of neurodevelopmental traits
+```{r}
+# Read in the results ASQ 6m social_communication 
+results_ASQ_6m_social_table_all_children= read.table("ASQ_6m_social_results_all.txt", header=TRUE) 
+```
+
+## 4. Merge the phenotypic file with PRS results 
+
+```{r}
+# Merge results_ASQ_6m_SCI_table with PRS-result file
+PRS_res_ASQ_6m_soc=merge(results_ASQ_6m_social_table, results_PRS, by=("IID"))
+PRS_res_ASQ_6m_soc=subset(PRS_res_ASQ_6m_soc,select=c("IID", "Z_score", "PRS_ADHD", "PRS_ASD", "Sex"))
+```
+
+## 5. Run simple linear regression models for association testing
+```{r}
+############ linear regression PRS_ADHD and Social communication 6m################
+PRS_ADHD_ASQ_6m_soc_all.regression=lm(Z_score ~ PRS_ADHD + Sex, data= PRS_res_ASQ_6m_soc)
+
+summary(PRS_ADHD_ASQ_6m_soc_all.regression)
+
+PRS_ADHD_ASQ_6m_soc_all.CI=confint(PRS_ADHD_ASQ_6m_soc_all.regression, 'PRS_ADHD', level=0.95) #calculate the confidence intervals 
+
+head(PRS_ADHD_ASQ_6m_soc_all.CI)
+```
+
+
+## 6. Read in phenotypic files with z_scores of neurodevelopmental traits from children of women with epilepsy(c_wwe)
+```{r}
+# Read in the results ASQ 6m social_communication 
+results_ASQ_6m_social_table_c_wwe= read.table("ASQ_6m_social_results_c_wwe.txt", header=TRUE) 
+```
+
+## 7. Merge the phenotypic(children of women with epilepsy) file with PRS results to have all results in one dataframe 
+
+```{r}
+# Merge results_ASQ_6m_SCI_table with PRS-result file
+PRS_res_ASQ_6m_soc_c_wwe=merge(results_ASQ_6m_social_table_c_wwe, results_PRS, by=("IID"))
+PRS_res_ASQ_6m_soc_c_wwe=subset(PRS_res_ASQ_6m_soc_c_wwe,select=c("IID", "Z_score", "PRS_ADHD", "PRS_ASD", "Sex", "Exposed_ASM"))
+
+```
+
+## 8. Run simple linear regression models for association testing 
+```{r}
+############ linear regression PRS_ADHD and Social communication 6m################
+PRS_ADHD_ASQ_6m_soc_c_wwe.regression=lm(Z_score ~ PRS_ADHD + Sex + Exposed_ASM, data= PRS_res_ASQ_6m_soc_c_wwe)
+
+summary(PRS_ADHD_ASQ_6m_soc_c_wwe.regression)
+
+PRS_ADHD_ASQ_6m_soc_c_wwe.regression.CI=confint(PRS_ADHD_ASQ_6m_soc_c_wwe.regression, 'PRS_ADHD', level=0.95) #calculate the confidence intervals 
+
+head(PRS_ADHD_ASQ_6m_soc_c_wwe.regression.CI)
+```
+
+## 9. After running all models run FDR correction using the Benjamini-Hochberg method  
+```{r}
+# Perform FDR correction using the Benjamini-Hochberg method
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+```
+
+##10. Visualization of the results 
+
+#### Provided is the code for plotting results (standardized beta coeffecients) from the linear regression models assesing association between PRSs for ADHD and repetitive behaviour in the children of the general population and the children of women with epilepsy. Same functionality can be applied plotting other models.
+```{r}
+# Add a grouping variable to distinguish the two result dataframes (containing info beta coefficients,CI and FDR-adjusted p-values at the different ages)
+data_all_children$group <- "All Children"
+data_epi_children$group <- "Children of Mothers with Epilepsy"
+
+# Combine data frames
+combined_data <- rbind(data_all_children, data_epi_children)
+
+#
+col1 = "#009E73"  # Green for All_kids 
+col2 = "orchid3" # purple for Epi_kids
+
+# cutoff- p value
+cutoff= 0.05
+
+# Create new column 'shape_group' based on cutoff value of p
+combined_df_RRB$Passes_multiple_testing_correction <- ifelse(combined_df_RRB$p < cutoff, "Yes", "No")
+combined_df_RRB$Age <- as.factor(combined_df_RRB$Age)
+
+
+p1= ggplot(combined_df_RRB, aes(x = Age, y = beta_coeff, color = group, shape = Passes_multiple_testing_correction)) +
+  geom_pointrange(
+    aes(ymin = lower, ymax = upper, color = group),
+    position = position_dodge(0.4), size = 0.7, alpha=0.7,            # Adjust the size of the points and line ends
+    linewidth = 0.5, na.rm = TRUE   # Thin lines for the ranges
+  )+
+  scale_color_manual(values = c("All children" = col1, "Children of\nmothers\nwith epilepsy" = col2)) +
+  scale_shape_manual(values = c("Yes" = 17, "No" = 16)) +
+  scale_color_manual(values = c("#009E73", "orchid3")) +
+  scale_x_discrete("Age at data collection(years)",breaks=c(0.5,1.5,3,5,8)) +
+  scale_y_continuous("Standardized beta coeffcient",breaks=c(-0.50, 0.50)) + 
+  geom_hline(yintercept = 0.00, color = "grey67", linetype = "dashed", size = 1.1, alpha=0.5)+
+  labs(title = expression(bold("A")),
+       color = "Study\npopulation",
+       shape = "Statistical\nsignificance") +
+  theme_minimal()+
+ 
+  theme(plot.title = element_text(hjust=0, size=14))+
+  theme(
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.title.y = element_blank()   # Remove y-axis title
+  )
+```
+
+## 11. Combining plots into one figure
+```{r}
+#combine the plots into one figure using ggarrange
+combined_plot <- ggarrange(p1, p2, p3, p4, p5, p6,
+                           ncol = 3, nrow = 2, # Arrange in 3 columns and 2 rows
+                           common.legend = TRUE, legend = "right") # Common legend at the bottom
+
+# Print the combined plot
+print(combined_plot)
+
+# Add common axis titles
+final_plot <- annotate_figure(combined_plot,
+                              left = text_grob("Standardized beta coefficient", rot = 90, vjust = 1, size = 12),
+                              bottom = text_grob("Age at data collection(years)", vjust = 0,  hjust = 0.5, size = 12))
+
+#save the final plot 
+ggsave(filename ="M:/path/to/folder/resuts_lin_reg_PRSs_ADHD_neur_dev_traits.png", plot= final_plot, dpi= 300, device ="tiff")
+```
+

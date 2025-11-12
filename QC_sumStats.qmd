@@ -1,0 +1,107 @@
+---
+title: "PRS QC"
+author: "Emilie Willoch Olstad"
+format: html
+editor: visual
+---
+
+## Prepare the environment
+
+### Load packages and define important variables
+
+```{r}
+require("dplyr")
+require("bigsnpr")
+require("ggplot2")
+require("tools")
+
+NCORES = nb_cores()
+```
+
+## QC of the base data
+
+### Load the summary statistics data
+
+```{r}
+sumstats = bigreadr::fread2("path_to_sumstats", 
+                            select = c("chr", "pos", "rsid", "a0", "a1", "Nca", "Nco", "beta", "beta_se", "p", "freq", "info"),
+                            col.names = c("chr", "pos", "rsid", "a0", "a1", "Nca", "Nco", "beta", "beta_se", "p", "freq", "info"))
+
+sumstats$n_eff =  4 / (1 / sumstats$Nca + 1 / sumstats$Nco) 
+
+# Run if your phenotype of interest is binary (i.e., ORs)
+sumstats$beta = log(sumstats$beta)
+```
+
+### Heritability check
+
+```{r}
+map_ldref = readRDS("path_to_hapmap3.rds")
+
+map_ldref$freq = as.numeric(map_ldref$af_UKBB)
+map_ldref$chr = as.integer(map_ldref$chr)
+
+info_snp = snp_match(sumstats, map_ldref, return_flip_and_rev = TRUE, join_by_pos = TRUE) %>% 
+  mutate(freq = ifelse(`_REV_`, 1 - freq, freq), 
+         `_REV_` = NULL, `_FLIP_`= NULL)
+
+info_snp = tidyr::drop_na(tibble::as_tibble(info_snp))
+
+# Heritability estimation by LD score regression
+(ldsc = with(info_snp, snp_ldsc(ld, ld_size = nrow(map_ldref),
+                              chi2 = (beta / beta_se)^2,
+                              sample_size = n_eff,
+                              ncores = NCORES)))
+
+heritability = ldsc[["h2"]]
+proceed = ifelse(heritability>=0.05, " and is >=0.05, thus, you can proceed with you data", "and is <0.05, thus, you should find better-quality data before you proceed")
+
+paste0("The heritability is ", heritability, proceed)
+```
+
+### Standard GWAS QC
+
+```{r}
+# Filter out SNPs
+sumstats_filt = sumstats[sumstats$info > 0.8 & sumstats$freq > 0.01,]
+```
+
+### Extended GWAS QC of the base data
+
+This QC step is suggested by the creators of the LDpred2 and it is described on the LDpred2 website (https://privefl.github.io/bigsnpr/articles/LDpred2.html).
+
+```{r}
+info_snp2 <- info_snp %>%
+  mutate(sd_af = sqrt(2 * freq.ss * (1 - freq.ss)),
+         sd_ss = 2 / sqrt(n_eff * beta_se^2 + beta^2), 
+         sd_ss = sd_ss / sqrt(info)) 
+
+info_snp2$is_bad <- with(info_snp2,
+                         info_snp2$sd_ss < (0.5 * info_snp2$sd_af) | info_snp2$sd_ss > (info_snp2$sd_af + 0.1) |
+                           info_snp2$sd_ss < 0.1 | info_snp2$sd_af < 0.05) 
+
+badsamples = info_snp2[info_snp2$is_bad, "rsid"]
+
+png(file="/plot_of_sd.png")
+qplot(sd_af, sd_ss, color = ifelse(is_bad, "Yes", "No"), alpha = I(0.5),
+      data = info_snp2) +
+  theme_bigstatsr(0.8) +
+  coord_equal() +
+  theme(legend.position = c(0.2, 0.8)) +
+  scale_color_viridis_d(direction = -1) +
+  geom_abline(linetype = 2, color = "red") +
+  labs(x = "Standard deviations derived from allele frequencies of the LD reference",
+       y = "Standard deviations derived from the summary statistics",
+       color = "Removed?")
+dev.off()
+
+sumstats_filt2 = sumstats_filt[!(sumstats_filt$rsid %in% badsamples$rsid), ]
+```
+
+### Save QC'ed summary statistics
+
+```{r}
+sumstats_filt_noDup = sumstats_filt2[!duplicated(sumstats_filt2$rsid),]
+
+write.table(sumstats_filt_noDup, "path_to_sumStatsQC.txt", quote = FALSE, row.names = FALSE)
+```
